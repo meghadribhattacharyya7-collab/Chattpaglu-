@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Professional Group Chat</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, onSnapshot, query, serverTimestamp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        setLogLevel('debug');
+
+        // ==== REPLACE THIS CONFIG WITH YOUR OWN FROM THE FIREBASE CONSOLE ====
+        const firebaseConfig = {
+            apiKey: "YOUR_API_KEY",
+            authDomain: "YOUR_AUTH_DOMAIN",
+            projectId: "YOUR_PROJECT_ID",
+            storageBucket: "YOUR_STORAGE_BUCKET",
+            messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+            appId: "YOUR_APP_ID"
+        };
+        // ======================================================================
+
+        const appId = "public-group-chat";
+        let app, auth, db, userId, username;
+
+        async function initializeFirebase() {
+            try {
+                app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+
+                // Anonymous sign-in
+                await signInAnonymously(auth);
+
+                onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        startChat();
+                    } else {
+                        console.log("No user signed in.");
+                    }
+                });
+            } catch (error) {
+                console.error("Firebase initialization or authentication error:", error);
+                document.getElementById('loading-message').textContent = `Error: ${error.message}`;
+            }
+        }
+
+        function startChat() {
+            document.getElementById('loading-screen').classList.add('hidden');
+            document.getElementById('chat-screen').classList.remove('hidden');
+            
+            // Display the username
+            document.getElementById('username-display').textContent = username;
+
+            // Start listening for messages
+            const messagesPath = `artifacts/${appId}/public/data/messages`;
+            const q = query(collection(db, messagesPath));
+
+            onSnapshot(q, (querySnapshot) => {
+                const messagesList = document.getElementById('messages-list');
+                messagesList.innerHTML = '';
+                const msgs = [];
+                querySnapshot.forEach((doc) => {
+                    msgs.push({ id: doc.id, ...doc.data() });
+                });
+
+                // Sort messages by timestamp after fetching
+                msgs.sort((a, b) => (a.timestamp ? a.timestamp.toMillis() : 0) - (b.timestamp ? b.timestamp.toMillis() : 0));
+
+                msgs.forEach((msg) => {
+                    const isOwnMessage = msg.userId === userId;
+                    const messageElement = document.createElement('div');
+                    
+                    messageElement.className = `flex items-start p-3 rounded-xl shadow-sm max-w-xs md:max-w-md ${isOwnMessage ? 'bg-blue-500 text-white rounded-br-sm ml-auto' : 'bg-white text-gray-800 rounded-bl-sm'}`;
+                    messageElement.innerHTML = `
+                        <div class="flex-1">
+                            <p class="font-semibold text-xs mb-1 ${isOwnMessage ? 'text-blue-200' : 'text-gray-500'}">
+                                ${isOwnMessage ? 'You' : `${msg.username}`}
+                            </p>
+                            <p class="break-words">${msg.text}</p>
+                            <p class="mt-1 text-xs text-right ${isOwnMessage ? 'text-blue-200' : 'text-gray-400'}">
+                                ${msg.timestamp ? new Date(msg.timestamp.toDate()).toLocaleTimeString() : '...'}
+                            </p>
+                        </div>
+                    `;
+                    messagesList.appendChild(messageElement);
+                });
+                messagesList.scrollTop = messagesList.scrollHeight;
+            }, (error) => {
+                console.error("Error fetching messages:", error);
+            });
+
+            // Handle message sending
+            document.getElementById('send-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const input = document.getElementById('message-input');
+                const text = input.value.trim();
+                if (text === '') return;
+
+                try {
+                    const messagesRef = collection(db, messagesPath);
+                    await addDoc(messagesRef, {
+                        text: text,
+                        userId: userId,
+                        username: username,
+                        timestamp: serverTimestamp(),
+                    });
+                    input.value = '';
+                } catch (e) {
+                    console.error("Error adding document: ", e);
+                }
+            });
+        }
+
+        function handleSetUsername() {
+            const input = document.getElementById('username-input');
+            const newUsername = input.value.trim();
+            if (newUsername) {
+                username = newUsername;
+                localStorage.setItem('chatUsername', username);
+                document.getElementById('username-screen').classList.add('hidden');
+                document.getElementById('loading-screen').classList.remove('hidden');
+                initializeFirebase();
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            username = localStorage.getItem('chatUsername');
+            if (username) {
+                document.getElementById('username-screen').classList.add('hidden');
+                document.getElementById('loading-screen').classList.remove('hidden');
+                initializeFirebase();
+            } else {
+                document.getElementById('username-screen').classList.remove('hidden');
+            }
+            
+            document.getElementById('set-username-btn').addEventListener('click', handleSetUsername);
+            document.getElementById('username-input').addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleSetUsername();
+                }
+            });
+        });
+    </script>
+</head>
+<body class="bg-gray-100 font-sans flex flex-col h-screen">
+
+    <!-- Username Input Screen -->
+    <div id="username-screen" class="flex items-center justify-center min-h-screen bg-gray-100 hidden">
+        <div class="flex flex-col items-center p-8 bg-white rounded-lg shadow-xl max-w-sm w-full">
+            <h1 class="text-2xl font-bold text-gray-800 mb-4">Join the Chat</h1>
+            <p class="text-sm text-gray-500 mb-6 text-center">Enter a name to get started.</p>
+            <input
+                id="username-input"
+                type="text"
+                placeholder="Choose a username..."
+                class="w-full p-3 rounded-lg bg-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4"
+            />
+            <button
+                id="set-username-btn"
+                class="flex-1 w-full bg-blue-600 text-white font-semibold py-3 rounded-lg shadow-lg hover:bg-blue-700 transition-all duration-200"
+            >
+                Join Chat
+            </button>
+        </div>
+    </div>
+
+    <!-- Loading Screen -->
+    <div id="loading-screen" class="flex items-center justify-center min-h-screen bg-gray-100 hidden">
+        <div class="flex flex-col items-center">
+            <div class="w-16 h-16 border-4 border-dashed rounded-full animate-spin border-blue-500"></div>
+            <p id="loading-message" class="mt-4 text-gray-500">Connecting to chat...</p>
+        </div>
+    </div>
+
+    <!-- Chat Screen (Initially hidden) -->
+    <div id="chat-screen" class="flex flex-col h-screen hidden">
+        <header class="bg-white p-4 flex justify-between items-center shadow-md">
+            <h1 class="text-xl font-bold text-gray-800">Professional Group Chat</h1>
+            <div class="text-sm text-gray-600">
+                Logged in as: <span id="username-display" class="font-mono text-gray-800 break-all"></span>
+            </div>
+        </header>
+
+        <main id="messages-list" class="flex-1 overflow-y-auto p-4 space-y-4"></main>
+
+        <footer class="bg-white p-4 shadow-inner">
+            <form id="send-form" class="flex gap-2">
+                <input
+                    id="message-input"
+                    type="text"
+                    placeholder="Type your message..."
+                    class="flex-1 p-3 rounded-full bg-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all duration-200"
+                />
+                <button
+                    type="submit"
+                    class="bg-blue-600 text-white font-semibold py-3 px-6 rounded-full shadow-lg hover:bg-blue-700 transition-all duration-200"
+                >
+                    Send
+                </button>
+            </form>
+        </footer>
+    </div>
+</body>
+</html>
